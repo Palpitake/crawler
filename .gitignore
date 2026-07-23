@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Runtime workspace (logs, screenshots, auth states, checkpoints)
+crawler_workspace/
+.pi-crawler-runtime/
+
+# Node
+node_modules/
+pi-browser-agent/node_modules/
+
+# Environment / secrets
+.env
+.env.*
+*.key
+*.pem
+*.p12
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# Temporary files
+*.tmp
+*.bak
+nul
+test.txt

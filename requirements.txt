@@ -1,0 +1,9 @@
+python-dotenv
+pydantic
+httpx
+beautifulsoup4
+lxml
+playwright
+pandas
+openpyxl
+tenacity
