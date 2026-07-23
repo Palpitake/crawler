@@ -179,4 +179,4 @@ Response bodies and browser storage state are never written to MySQL.
 
 ## License
 
-Private project.
+[MIT](LICENSE)
