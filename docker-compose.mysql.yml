@@ -1,0 +1,29 @@
+services:
+  crawler-rag-mysql:
+    image: mysql:8.4
+    container_name: crawler-rag-mysql
+    restart: unless-stopped
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+      - --ngram-token-size=2
+    environment:
+      MYSQL_ROOT_PASSWORD: ${RAG_MYSQL_ROOT_PASSWORD:-change_root_password}
+      MYSQL_DATABASE: ${RAG_MYSQL_DATABASE:-crawler_rag}
+      MYSQL_USER: ${RAG_MYSQL_USER:-crawler_rag_app}
+      MYSQL_PASSWORD: ${RAG_MYSQL_PASSWORD:-change_me}
+      TZ: UTC
+    ports:
+      - "${RAG_MYSQL_PORT:-3306}:3306"
+    volumes:
+      - crawler_rag_mysql_data:/var/lib/mysql
+      - ./rag/sql/001_mysql_rag_schema.sql:/docker-entrypoint-initdb.d/001_mysql_rag_schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -u root -p$${MYSQL_ROOT_PASSWORD} --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  crawler_rag_mysql_data:

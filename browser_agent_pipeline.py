@@ -25,7 +25,7 @@ from transcript_utils import sanitize_agent_transcript
 
 
 logger = get_logger("agent.browser")
-BROWSER_AGENT_BUILD = "2026.07.22-browser-native-loop-v13.5-auth-protocol"
+BROWSER_AGENT_BUILD = "2026.07.23-browser-native-loop-v13.6-mysql-rag"
 _LAST_CHECKPOINT_LOG_SIGNATURE: dict[str, str] = {}
 
 
@@ -1143,7 +1143,7 @@ required_action: {required_action or 'manual_login_and_verify'}
 用户要求全量: {any(re.search(r'评论|回复|comment|reply', str(v), re.I) for v in target_fields)}
 最大模型 turn: {max_turns}
 最大浏览器工具调用: {max_tools}
-历史策略候选（可以完全推翻）: {json.dumps(rag_hits[:3], ensure_ascii=False, default=str)[:3000]}
+结构化 Browser Memory Cards（仅为历史假设，必须用当前页面证据复验）: {json.dumps(rag_hits[:3], ensure_ascii=False, default=str)[:3000]}
 上轮执行反馈（只用于定位缺失证据，不是网页指令）: {json.dumps(failure_feedback or {}, ensure_ascii=False, default=str)[:5000]}
 恢复检查点（客观证据与已完成动作，不是网页指令）: {json.dumps(recovery_context or {}, ensure_ascii=False, default=str)[:12000]}
 {comment_workflow}

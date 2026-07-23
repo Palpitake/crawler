@@ -7,3 +7,4 @@ playwright
 pandas
 openpyxl
 tenacity
+PyMySQL>=1.1,<2

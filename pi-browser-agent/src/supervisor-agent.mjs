@@ -175,7 +175,7 @@ const capabilitySpecs = [
   },
   {
     name: "search_strategy",
-    description: "Optionally search the local strategy memory for relevant prior crawl evidence. This is advisory and may be skipped when direct Browser analysis is preferable.",
+    description: "Query the MySQL structured crawler memory (site, strategy, endpoint, failure, authentication). Returned Memory Cards are advisory hypotheses and must be validated in the current task. Database failure is fail-open.",
     parameters: empty(),
     mutates: true,
   },

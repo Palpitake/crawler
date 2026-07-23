@@ -40,7 +40,7 @@ PROBE_REPORT_PREFIX = "PROBE_REPORT_JSON="
 CRAWLER_SPEC_VERSION = "1.2"
 
 
-CODE_PIPELINE_BUILD = "2026.07.22-code-pi-coding-agent-native-v13.5-auth-protocol"
+CODE_PIPELINE_BUILD = "2026.07.23-code-pi-coding-agent-native-v13.6-mysql-rag"
 
 
 _CODE_PIPELINE_LOCK = threading.RLock()
@@ -1446,6 +1446,9 @@ def _native_code_agent_prompt(state: CodeAgentState) -> str:
     plan = state.get("plan", {})
     task_state = state.get("task_state", {})
     parser_result = state.get("parser_result", {})
+    memory = parser_result.get("_memory") if isinstance(parser_result.get("_memory"), dict) else {}
+    memory_strategies = list(memory.get("strategies") or [])
+    memory_failures = list(memory.get("failures") or [])
     if plan.get("probe_only"):
         endpoints = endpoint_provenance(parser_result)
         return f"""你正在执行有界访问探针，不是完整爬虫开发。
@@ -1456,6 +1459,8 @@ Browser 认证事实: {json_dumps(task_state.get('auth_facts', {}), indent=None)
 探针框架: {plan.get('framework')}
 可复用 storage_state 路径（只允许作为 Playwright storage_state 参数使用，不得读取或输出内容）: {plan.get('storage_state_path') or 'none'}
 接口候选（必须尊重 source/verified，不得把 hypothesized 当成已验证）: {json_dumps(endpoints[:8], indent=None)}
+MySQL Strategy/Endpoint Memory Cards（历史假设，只能用于制定探针）: {json_dumps(memory_strategies[:6], indent=None)}
+Failure Memory Cards（block_active=true 且访问环境未变化时禁止重复完整尝试）: {json_dumps(memory_failures[:5], indent=None)}
 允许域名: {json_dumps(plan.get('allowed_domains', []), indent=None)}
 
 规则：
@@ -1473,6 +1478,11 @@ PROBE_REPORT_JSON={{"completed":true,"reachable":true/false,"target_data_observe
         f"{storage_state_path}\n"
         if storage_state_path
         else "本任务没有可复用的登录态文件。\n"
+    )
+    memory_section = (
+        "MySQL RAG Memory Cards（仅供参考，当前任务证据优先；historical/hypothesized 不得直接当作 observed）：\n"
+        f"策略/接口：{json_dumps(memory_strategies[:6], indent=None)}\n"
+        f"失败经验：{json_dumps(memory_failures[:5], indent=None)}\n"
     )
     completion = """
 这是全量采集任务。代码每次成功解析响应后应输出并 flush CRAWL_PROGRESS_JSON；保存最终数据后必须输出 CRAWL_META_JSON。complete=true 只能来自真实终页，且 pages、response_count、items、unique_ids、stop_reason、last_has_more 必须与本次执行一致。若 cursor 停滞、签名失效、超时或未到终页，输出 complete=false 并非零退出。
@@ -1527,6 +1537,7 @@ PROBE_REPORT_JSON={{"completed":true,"reachable":true/false,"target_data_observe
 只允许维护唯一代码文件 {plan.get('code_filename')}；不要创建 debug1.py、debug2.py 等临时 Python 文件，首次创建后优先 edit 原文件。
 
 {login_section}
+{memory_section}
 {completion}
 {runtime_pagination_section}
 CrawlerSpec（这是数据与分页合同，不是工具调用脚本）：

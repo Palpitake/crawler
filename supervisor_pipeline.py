@@ -25,6 +25,7 @@ from api_logger import get_all_summaries, reset_all_trackers
 from logger import get_logger, log_event, set_log_context
 from transcript_utils import sanitize_agent_transcript
 from common import json_dumps
+from rag import get_rag_service
 from runtime_facts import (
     ERROR_CATEGORY_BY_ROOT, classify_runtime_failure, code_entry_mode,
     endpoint_provenance, normalize_auth_facts, progress_delta,
@@ -33,7 +34,7 @@ from runtime_facts import (
 
 _pipeline_log = get_logger("pipeline")
 _supervisor_log = get_logger("agent.supervisor")
-SUPERVISOR_AGENT_BUILD = "2026.07.22-supervisor-native-loop-v13.5-auth-protocol"
+SUPERVISOR_AGENT_BUILD = "2026.07.23-supervisor-native-loop-v13.6-mysql-rag"
 
 def _append_log(
     state: CrawlerState,
@@ -135,6 +136,11 @@ class CrawlerState(TypedDict, total=False):
     max_retries: int
 
     rag_hits: List[Dict[str, Any]]
+    rag_memory_views: Dict[str, Any]
+    rag_query: Dict[str, Any]
+    rag_backend: str
+    rag_warnings: List[str]
+    rag_commit: Dict[str, Any]
     use_cached_strategy: bool
     final_output: Dict[str, Any]
     fix_exhausted: bool
@@ -398,72 +404,32 @@ def _classify_error(error_type: str) -> str:
 # RAG 工具
 # =============================================================================
 
-def _search_rag(target_url: str, target_fields: List[str]) -> List[Dict[str, Any]]:
-    _ensure_dirs()
-    rag_file = RAG_DIR / "crawler_rag.jsonl"
-    if not rag_file.exists():
-        return []
+def _search_rag(state: CrawlerState) -> Dict[str, Any]:
+    """Query the structured memory service.
 
-    target_domain = _domain(target_url)
-    target_set = {str(f).lower() for f in (target_fields or [])}
-    records: List[Dict[str, Any]] = []
-
-    for line in rag_file.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            records.append(json.loads(line))
-        except Exception:
-            continue
-
-    scored = []
-    for r in records[-200:]:
-        score = 0.0
-        r_url = r.get("url", "")
-        r_domain = r.get("domain", _domain(r_url))
-        if target_domain and target_domain == r_domain:
-            score += 0.45
-        if target_url and r_url and (target_url in r_url or r_url in target_url):
-            score += 0.25
-        r_fields = set(str(f).lower() for f in (r.get("target_fields") or r.get("fields") or []))
-        if target_set and r_fields:
-            overlap = len(target_set & r_fields)
-            score += 0.20 * (overlap / max(len(target_set | r_fields), 1))
-        if r.get("last_success_at") or r.get("success_count"):
-            score += 0.10
-        if score > 0:
-            r["rag_score"] = round(score, 4)
-            scored.append((score, r))
-
-    scored.sort(key=lambda x: x[0], reverse=True)
-    return [item for _, item in scored[:5]]
+    Storage and ranking live in ``rag/``.  This wrapper keeps Supervisor fail-open
+    and prevents database details from leaking into capability logic.
+    """
+    return get_rag_service().search_state(dict(state))
 
 
-def _save_rag(state: CrawlerState) -> None:
-    parser = state.get("parser_result") or {}
-    execution = state.get("execution_result") or {}
-    record = {
-        "url": state.get("target_url", ""),
-        "domain": _domain(state.get("target_url", "")),
-        "page_type": parser.get("page_type") or state.get("page_type"),
-        "data_source": parser.get("data_source") or state.get("data_source"),
-        "target_fields": state.get("target_fields", []),
-        "selectors": parser.get("selectors", {}),
-        "api_endpoints": parser.get("api_endpoints", []),
-        "pagination": parser.get("pagination", {}),
-        "interaction_plan": parser.get("interaction_plan", []),
-        "code_framework": state.get("code_framework", ""),
-        "success": bool(execution.get("success") and _safe_int(execution.get("items_count"), 0) > 0),
-        "success_count": _safe_int(execution.get("items_count"), 0),
-        "last_success_at": _now_iso() if execution.get("success") else None,
-        "confidence": _safe_float(parser.get("confidence"), 0.0),
-        "created_at": _now_iso(),
-    }
-    _ensure_dirs()
-    rag_file = RAG_DIR / "crawler_rag.jsonl"
-    with rag_file.open("a", encoding="utf-8") as f:
-        f.write(json_dumps(record, indent=None) + "\n")
+def _commit_rag(state: CrawlerState) -> Dict[str, Any]:
+    """Commit success, failure, authentication and execution facts once at finalize."""
+    try:
+        from browser_agent_pipeline import BROWSER_AGENT_BUILD
+        from code_pipeline import CODE_PIPELINE_BUILD
+        builds = {
+            "supervisor": SUPERVISOR_AGENT_BUILD,
+            "browser": BROWSER_AGENT_BUILD,
+            "code": CODE_PIPELINE_BUILD,
+        }
+        return get_rag_service().commit_state(dict(state), builds)
+    except Exception as exc:
+        log_event(
+            _pipeline_log, "rag.upsert", level="WARNING", status="degraded",
+            error_type="rag_commit_failed", reason=str(exc),
+        )
+        return {"ok": False, "error": str(exc)}
 
 
 # =============================================================================
@@ -570,39 +536,57 @@ def parse_request(
 # =============================================================================
 
 def rag_check(state: CrawlerState) -> CrawlerState:
-    target_url = state.get("target_url", "")
-    target_domain = _domain(target_url)
-    target_fields = state.get("target_fields", [])
-    _append_log(state, "INFO", "rag_check", "开始查询历史策略", status="started", domain=target_domain)
+    target_domain = _domain(state.get("target_url", ""))
+    _append_log(state, "INFO", "rag_check", "开始查询 MySQL 结构化经验记忆", status="started", domain=target_domain)
+    result = _search_rag(state)
+    supervisor_cards = list(result.get("supervisor") or [])
+    browser_cards = list(result.get("browser") or [])
+    code_cards = list(result.get("code") or [])
+    failure_cards = list(result.get("failures") or [])
+    warnings = list(result.get("warnings") or [])
+    best_score = max([float(card.get("match_score") or 0.0) for card in supervisor_cards] or [0.0])
+    blocked_failures = [card for card in failure_cards if card.get("block_active")]
 
-    hits = _search_rag(target_url, target_fields)
-
-    same_domain_hits = [h for h in hits if h.get("domain") == target_domain] if target_domain else []
-    cross_domain_hits = [h for h in hits if h.get("domain") != target_domain]
-
-    if same_domain_hits:
-        best_score = same_domain_hits[0]["rag_score"]
-        _append_log(state, "INFO", "rag_check", "命中同域历史策略", status="success", hits=len(same_domain_hits), best_score=best_score, domain=target_domain)
-        hits = same_domain_hits
-    elif cross_domain_hits and cross_domain_hits[0]["rag_score"] >= 0.55:
-        _append_log(state, "INFO", "rag_check", "仅命中跨域历史策略", status="advisory", hits=len(cross_domain_hits), domain=target_domain)
-        hits = cross_domain_hits[:1]
+    if supervisor_cards:
+        _append_log(
+            state, "INFO", "rag_check", "命中结构化经验记忆",
+            status="success_with_warnings" if warnings else "success",
+            backend=result.get("backend"), candidates=result.get("candidate_count", 0),
+            selected=len(supervisor_cards), best_score=best_score,
+            failure_hits=len(failure_cards), blocked_failures=len(blocked_failures),
+            latency_ms=result.get("latency_ms", 0), warning_codes=warnings,
+        )
+    elif failure_cards:
+        _append_log(
+            state, "WARNING", "rag_check", "未命中可复用策略，但命中失败经验",
+            status="advisory", backend=result.get("backend"),
+            failure_hits=len(failure_cards), blocked_failures=len(blocked_failures),
+            latency_ms=result.get("latency_ms", 0), warning_codes=warnings,
+        )
     else:
-        hits = []
-
-    best_score = hits[0]["rag_score"] if hits else 0.0
-
-    if best_score >= 0.85 and hits and hits[0].get("page_type"):
-        _append_log(state, "INFO", "rag_check", "历史策略可供 Browser 参考", status="success", best_score=best_score, confidence="high")
-    elif hits:
-        _append_log(state, "INFO", "rag_check", "历史策略可选参考", status="success", hits=len(hits), best_score=best_score)
-    else:
-        _append_log(state, "INFO", "rag_check", "未命中历史策略", status="skipped", hits=0)
+        _append_log(
+            state, "INFO", "rag_check", "未命中可用经验记忆",
+            status="skipped", backend=result.get("backend"), hits=0,
+            latency_ms=result.get("latency_ms", 0), warning_codes=warnings,
+        )
 
     return {
         **state,
-        "rag_hits": hits,
-        "use_cached_strategy": best_score >= 0.85,
+        # Backward-compatible Browser input.  It now contains compact Browser
+        # Memory Cards rather than raw database rows or truncated JSON.
+        "rag_hits": browser_cards,
+        "rag_memory_views": {
+            "supervisor": supervisor_cards,
+            "browser": browser_cards,
+            "code": code_cards,
+            "failures": failure_cards,
+        },
+        "rag_query": result.get("query") or {},
+        "rag_backend": str(result.get("backend") or "unknown"),
+        "rag_warnings": warnings,
+        # Cached strategies are never trusted directly.  This flag now means
+        # "high-quality candidate available for bounded validation".
+        "use_cached_strategy": bool(best_score >= 0.75 and supervisor_cards),
         "rag_checked": True,
     }
 
@@ -935,6 +919,18 @@ def run_code_capability(state: CrawlerState) -> CrawlerState:
     )
 
     parser = state.get("parser_result") if isinstance(state.get("parser_result"), dict) else {}
+    memory_views = state.get("rag_memory_views") if isinstance(state.get("rag_memory_views"), dict) else {}
+    code_memory_cards = list(memory_views.get("code") or [])
+    failure_memory_cards = list(memory_views.get("failures") or [])
+    if code_memory_cards or failure_memory_cards:
+        parser = {
+            **parser,
+            "_memory": {
+                "strategies": code_memory_cards[:6],
+                "failures": failure_memory_cards[:5],
+                "rule": "historical memory requires current-task validation",
+            },
+        }
     existing_code_checkpoint = state.get("code_checkpoint") if isinstance(state.get("code_checkpoint"), dict) else {}
     if existing_code_checkpoint and entry_mode == "full":
         _append_log(
@@ -945,7 +941,13 @@ def run_code_capability(state: CrawlerState) -> CrawlerState:
             repair_attempt=state.get("code_version", 0),
         )
 
-    task_state = {**state, "code_entry_mode": entry_mode, "auth_facts": validation.get("auth_facts") or state.get("auth_facts", {})}
+    task_state = {
+        **state,
+        "code_entry_mode": entry_mode,
+        "auth_facts": validation.get("auth_facts") or state.get("auth_facts", {}),
+        "rag_code_memory": code_memory_cards[:6],
+        "rag_failure_memory": failure_memory_cards[:5],
+    }
     try:
         pipeline_result = run_code_pipeline(parser_result=parser, state=task_state)
         pipeline_info = pipeline_result.pop("_pipeline", {})
@@ -1346,7 +1348,6 @@ def evaluate_execution(state: CrawlerState) -> CrawlerState:
             "pending_recheck_policy": {}, "accepted_artifact_snapshot": {}, "error_info": {},
             "error_category": "none", "execution_attempted": True,
         }
-        _save_rag(completed)
         return completed
 
     root = str(error.get("root_error_type") or execution.get("root_error_type") or error.get("error_type") or execution.get("error_type") or "crawler_runtime_error")
@@ -1557,6 +1558,20 @@ def finalize(state: CrawlerState) -> CrawlerState:
         elif state.get("generated_code"):
             final_output["generated_code"] = state.get("generated_code", "")
 
+    finalized_state = {
+        **state,
+        "final_output": final_output,
+        "task_finished_at": time.time(),
+    }
+    rag_commit = _commit_rag(finalized_state)
+    final_output["rag"] = {
+        "backend": state.get("rag_backend") or rag_commit.get("backend") or "unknown",
+        "commit_ok": bool(rag_commit.get("ok")),
+        "warnings": list(state.get("rag_warnings") or []),
+    }
+    finalized_state["final_output"] = final_output
+    finalized_state["rag_commit"] = rag_commit
+
     state_path = None
     try:
         _ensure_dirs()
@@ -1573,6 +1588,7 @@ def finalize(state: CrawlerState) -> CrawlerState:
             "error_info": error,
             "browser_pipeline_info": state.get("browser_pipeline_info", {}),
             "final_output": final_output,
+            "rag_commit": rag_commit,
             "created_at": _now_iso(),
         }), encoding="utf-8")
         state_path = str(snap)
@@ -1598,10 +1614,7 @@ def finalize(state: CrawlerState) -> CrawlerState:
         authentication_state=auth_state,
     )
 
-    return {
-        **state,
-        "final_output": final_output,
-    }
+    return finalized_state
 
 
 # =============================================================================
@@ -1649,7 +1662,7 @@ SUPERVISOR_NATIVE_PROMPT = """你是通过 pi-agent-core 运行的自主 Supervi
 
 你拥有一组能力工具，可依据当前证据自由选择、重复或跳过：
 - set_task_spec：记录或纠正结构化任务。
-- search_strategy：可选的历史策略检索；不是必经步骤。
+- search_strategy：查询 MySQL 结构化经验记忆（站点、策略、接口、失败、认证）；命中结果必须先验证。
 - run_browser：运行或恢复普通 Browser 探索。Browser Agent 自行判断解析方案。
 - resolve_authentication：执行独立认证协议；宿主把 Browser 限制为 manual_login → auth_probe → submit_parser，不是普通探索提示。
 - run_code：仅在尚无成功产物时运行或恢复 pi-coding-agent。
@@ -1659,7 +1672,7 @@ SUPERVISOR_NATIVE_PROMPT = """你是通过 pi-agent-core 运行的自主 Supervi
 
 工作原则：
 1. 目标 URL 或字段尚未记录时，先调用 set_task_spec。解析规则：第一个完整 http/https URL；只说“全部评论”时字段为 ["评论内容","评论用户","评论时间","点赞数"]；未指定数量时 max_items=null；默认 csv。
-2. RAG 是可选能力，不得因为没有检索 RAG 而阻止 Browser。
+2. RAG 是可选优化，不得因为数据库不可用而阻止任务。Memory Card 只是假设：historical/hypothesized 必须 Probe 或 Browser 复验；命中的 active failure block 在环境未变化时不得重复完整尝试。
 3. 尚未成功时 Browser 与 Code 可按证据重试。已有成功产物后，默认立即 finalize_task；不得再次调用普通 run_code。只有发现具体缺陷时才使用 recheck_code。
 4. 可以在同一模型回复中调用多个工具；有副作用的工具会顺序执行，因此 run_browser 后可直接 run_code，但不得伪造工具结果。
 5. Python 只负责权限、安全边界、预算、checkpoint 和最低事实记录，不再用固定源码模式或证据模板决定业务成败。你应结合 Agent 自检、真实 stdout、数据文件与样本自行判断。
@@ -1771,7 +1784,12 @@ def _state_summary(state: CrawlerState) -> Dict[str, Any]:
         "target_url": sanitize_url(str(state.get("target_url") or "")),
         "target_fields": state.get("target_fields", []), "output_format": state.get("output_format", "csv"),
         "max_items": state.get("max_items"), "rag_checked": bool(state.get("rag_checked")),
-        "rag_hits": len(state.get("rag_hits") or []), "parser_attempts": int(state.get("parser_attempts", 0) or 0),
+        "rag_hits": len(state.get("rag_hits") or []),
+        "rag_backend": state.get("rag_backend") or "unknown",
+        "rag_strategy_cards": len(((state.get("rag_memory_views") or {}).get("supervisor") or [])) if isinstance(state.get("rag_memory_views"), dict) else 0,
+        "rag_failure_cards": len(((state.get("rag_memory_views") or {}).get("failures") or [])) if isinstance(state.get("rag_memory_views"), dict) else 0,
+        "rag_blocked_failures": [card for card in (((state.get("rag_memory_views") or {}).get("failures") or []) if isinstance(state.get("rag_memory_views"), dict) else []) if isinstance(card, dict) and card.get("block_active")][:5],
+        "parser_attempts": int(state.get("parser_attempts", 0) or 0),
         "parser_valid": bool(validation.get("full_code_ready")), "parser_usable_for_probe": bool(validation.get("can_enter_code")),
         "parser_confidence": state.get("parser_confidence", parser.get("confidence", 0)),
         "data_source": state.get("data_source", parser.get("data_source", "unknown")),
@@ -1819,6 +1837,24 @@ def _recommended_actions(state: CrawlerState) -> List[str]:
     auth_state = str(summary.get("authentication_state") or "unknown")
     category = str(summary.get("error_category") or "none")
     mode = str(summary.get("code_entry_mode") or "probe")
+    blocked_failures = list(summary.get("rag_blocked_failures") or [])
+    top_block = blocked_failures[0] if blocked_failures else {}
+    blocked_retry = str(top_block.get("retry_strategy") or "")
+    blocked_root = str(top_block.get("root_error_type") or "")
+
+    # Active Failure Memory is a deterministic guard against repeating the same
+    # full attempt in an unchanged access context.  Authentication resolution
+    # remains allowed when that is the required state change.
+    if blocked_failures and not summary.get("execution_attempted"):
+        blocked_auth_state = str(top_block.get("authentication_state") or "unknown")
+        if auth_state in {"required", "challenge", "provisional"} and (
+            blocked_retry == "resolve_authentication" or blocked_auth_state in {"required", "challenge", "provisional"}
+        ):
+            actions.extend(["resolve_authentication", "inspect_task"])
+            return list(dict.fromkeys(actions))
+        if blocked_root in {"rate_limited", "access_denied", "service_unavailable"}:
+            actions.extend(["inspect_task", "finalize_task"])
+            return list(dict.fromkeys(actions))
 
     if auth_state in {"required", "challenge", "provisional"}:
         auth_attempts = int(summary.get("auth_resolution_attempts", 0) or 0)
@@ -1887,6 +1923,11 @@ def _initial_supervisor_state(
         "error_info": {},
         "error_category": "none",
         "rag_hits": [],
+        "rag_memory_views": {"supervisor": [], "browser": [], "code": [], "failures": []},
+        "rag_query": {},
+        "rag_backend": "unknown",
+        "rag_warnings": [],
+        "rag_commit": {},
         "rag_checked": False,
         "interaction_plan": [],
         "browser_feedback": {},
@@ -2052,6 +2093,8 @@ def run_supervisor(
                 active_state = {
                     **active_state,
                     "rag_hits": [],
+                    "rag_memory_views": {"supervisor": [], "browser": [], "code": [], "failures": []},
+                    "rag_query": {}, "rag_backend": "unknown", "rag_warnings": [], "rag_commit": {},
                     "rag_checked": False,
                     "parser_result": {},
                     "browser_checkpoint": {},

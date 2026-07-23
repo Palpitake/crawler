@@ -20,7 +20,7 @@ AUTH_DIR = Path(
     )
 )
 _BROWSER_PIPELINE_LOCK = threading.Lock()
-BROWSER_PIPELINE_BUILD = "2026.07.22-browser-pi-agent-core-native-v13.5-auth-protocol"
+BROWSER_PIPELINE_BUILD = "2026.07.23-browser-pi-agent-core-native-v13.6-mysql-rag"
 
 
 def run_browser_pipeline(
