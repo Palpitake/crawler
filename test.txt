@@ -1,0 +1,5 @@
+F:\crawler\venv\Scripts\python.exe F:\crawler\main.py
+爬取https://movie.douban.com/top250的全部电影相关信息
+爬取https://www.douyin.com/video/7642645006151227291?modeFrom=,视频下的全部评论
+爬取https://www.bilibili.com/video/BV1oVKG6CEMZ/?spm_id_from=333.1007.tianma.1-2-2.click视频下的全部评论
+爬取https://www.xiaohongshu.com/explore/6a41bced000000000f03087c?xsec_token=AB0NHmXj4SROCi_LWOE0jnee_HMKQ4DlUqQGqrDXc91wk=&xsec_source=pc_feed中的全部评论
