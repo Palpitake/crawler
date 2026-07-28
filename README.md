@@ -25,12 +25,14 @@
 
 ### Key components
 
-- **Supervisor** (`supervisor_pipeline.py`): 路由决策、认证管理、进度评估
-- **Browser Agent** (`browser_agent_pipeline.py`): 页面探索、网络抓包、登录处理
-- **Code Agent** (`code_pipeline.py`): 爬虫脚本生成、数据抓取、分页处理
-- **RAG** (`rag/`): MySQL 结构化经验记忆、策略复用、失败记忆
-- **Playwright MCP** (`mcp_browser_tools.py`): 浏览器自动化工具集
-- **Runtime Facts** (`runtime_facts.py`): 运行时事实、错误分类、进度追踪
+- **Supervisor** (`crawler_agent/pipelines/supervisor_pipeline.py`): 路由决策、认证管理、进度评估
+- **Browser Agent** (`crawler_agent/pipelines/browser_agent_pipeline.py`): 页面探索、网络抓包、登录处理
+- **Code Agent** (`crawler_agent/pipelines/code_pipeline.py`): 爬虫脚本生成、数据抓取、分页处理
+- **RAG** (`crawler_agent/rag/`): MySQL 结构化经验记忆、策略复用、失败记忆
+- **Auth** (`crawler_agent/auth/`): 认证决策、会话管理、证据收集
+- **Tools** (`crawler_agent/tools/`): Playwright MCP 浏览器工具、代码执行工具
+- **Runtimes** (`crawler_agent/runtimes/`): Browser / Code 运行时
+- **Core** (`crawler_agent/core/`): 日志、工具函数、运行时事实、错误分类
 
 ## Features
 
@@ -71,7 +73,7 @@ docker compose -f docker-compose.mysql.yml --env-file .env up -d
 ```bash
 cp .env.mysql.example .env
 # Edit .env with your MySQL connection details
-mysql -u root -p < rag/sql/001_mysql_rag_schema.sql
+mysql -u root -p < crawler_agent/rag/sql/001_mysql_rag_schema.sql
 ```
 
 ### 3. Verify
@@ -129,32 +131,49 @@ RAG_TOP_K_SITE=5 / STRATEGY=8 / FAILURE=5
 ## Project structure
 
 ```text
-├── main.py                    # Entry point
-├── supervisor_pipeline.py     # Supervisor agent
-├── browser_agent_pipeline.py  # Browser agent (Playwright MCP)
-├── browser_pipeline.py        # Browser pipeline wrapper
-├── code_pipeline.py           # Code agent
-├── pi_browser_runtime.py      # Browser runtime
-├── pi_code_runtime.py         # Code runtime
-├── mcp_browser_tools.py       # Playwright MCP tools
-├── code_tools.py              # Code execution tools
-├── common.py                  # Shared utilities
-├── runtime_facts.py           # Runtime facts & error classification
-├── rag/                       # MySQL RAG module
-│   ├── config.py / models.py / normalizer.py
-│   ├── ranker.py / memory_cards.py / pool.py
-│   ├── repository.py / writer.py / service.py
-│   ├── migration.py / maintenance.py
-│   └── sql/001_mysql_rag_schema.sql
-├── scripts/                   # Utility scripts
-│   ├── rag_health.py
-│   ├── rag_init_mysql.py
-│   ├── rag_migrate.py
-│   └── rag_maintenance.py
-├── pi-browser-agent/          # Node.js agent runtime
-│   └── src/ (browser-agent.mjs, code-agent.mjs, supervisor-agent.mjs)
-├── docker-compose.mysql.yml   # Docker MySQL setup
-└── .env.mysql.example         # Environment template
+├── main.py                         # Entry point
+├── crawler_agent/                  # Core package
+│   ├── __init__.py / version.py / cli.py
+│   ├── core/                       # Shared utilities
+│   │   ├── common.py               #   LLM helpers, JSON utils
+│   │   ├── logger.py               #   Structured logging
+│   │   ├── api_logger.py           #   API cost tracking
+│   │   ├── runtime_facts.py        #   Error classification, progress
+│   │   ├── collection_evidence.py  #   Evidence collection
+│   │   ├── tooling.py              #   Tool utilities
+│   │   └── transcript_utils.py     #   Transcript sanitization
+│   ├── pipelines/                  # Agent pipelines
+│   │   ├── supervisor_pipeline.py  #   Supervisor (routing, auth, progress)
+│   │   ├── browser_agent_pipeline.py # Browser (Playwright MCP exploration)
+│   │   ├── browser_pipeline.py     #   Browser pipeline wrapper
+│   │   └── code_pipeline.py        #   Code (crawler generation)
+│   ├── runtimes/                   # Pi agent runtimes
+│   │   ├── pi_browser_runtime.py   #   Browser agent runtime
+│   │   └── pi_code_runtime.py      #   Code agent runtime
+│   ├── tools/                      # Tool implementations
+│   │   ├── mcp_browser_tools.py    #   Playwright MCP browser tools
+│   │   └── code_tools.py           #   Code execution tools
+│   ├── auth/                       # Authentication module
+│   │   ├── contracts.py / decision.py / evidence.py
+│   │   ├── models.py / service.py / sessions.py
+│   └── rag/                        # MySQL RAG module
+│       ├── config.py / models.py / normalizer.py
+│       ├── ranker.py / memory_cards.py / pool.py
+│       ├── repository.py / writer.py / service.py
+│       ├── feedback.py / migration.py / maintenance.py
+│       └── sql/001_mysql_rag_schema.sql
+├── scripts/                        # Utility scripts
+│   ├── rag_health.py / rag_init_mysql.py
+│   ├── rag_migrate.py / rag_maintenance.py
+│   └── _bootstrap.py
+├── tests/                          # Test suite
+├── docs/                           # Documentation
+│   ├── RAG_MYSQL.md
+│   └── AUTHENTICATION.md
+├── pi-browser-agent/               # Node.js agent runtime
+│   └── src/ (browser-agent.mjs, code-agent.mjs, supervisor-agent.mjs, agent-utils.mjs)
+├── docker-compose.mysql.yml        # Docker MySQL setup
+└── .env.mysql.example              # Environment template
 ```
 
 ## Maintenance
