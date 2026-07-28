@@ -1,200 +1,189 @@
-# Crawler Agent v13.6 — Multi-Agent Intelligent Crawler
+<p align="center">
+  <h1 align="center">🕷️ Crawler Agent</h1>
+  <p align="center">
+    <strong>Multi-Agent Intelligent Web Crawler</strong><br/>
+    LangGraph Supervisor + Playwright MCP + DeepSeek
+  </p>
+  <p align="center">
+    <img src="https://img.shields.io/badge/Python-3.10+-3776AB?logo=python&logoColor=white" />
+    <img src="https://img.shields.io/badge/Node.js-22.19+-339933?logo=node.js&logoColor=white" />
+    <img src="https://img.shields.io/badge/MySQL-8.4+-4479A1?logo=mysql&logoColor=white" />
+    <img src="https://img.shields.io/badge/License-MIT-green" />
+  </p>
+</p>
 
-基于 LangGraph 的多 Agent 智能爬虫系统，通过 Supervisor + Browser Agent + Code Agent 协作完成网页数据抓取。
+---
+
+## What is this?
+
+一个基于 **LangGraph 多 Agent 架构**的智能爬虫系统。给定一个 URL 和目标字段，系统自动：
+
+1. 🔍 **探索页面** — Browser Agent 通过 Playwright 分析页面结构、抓包 API
+2. 🧠 **制定策略** — Supervisor 根据证据路由决策，复用历史经验
+3. ⚙️ **生成爬虫** — Code Agent 自动生成可运行的爬虫脚本
+4. 📊 **产出数据** — 输出结构化 CSV / JSON 数据文件
+
+核心特点：**不需要预定义选择器或 API 路径**，Agent 自主探索并适应不同网站。
 
 ## Architecture
 
-```text
-┌─────────────┐     ┌──────────────────┐     ┌──────────────┐
-│  Supervisor  │────▶│  Browser Agent   │     │  Code Agent  │
-│  (pi-agent)  │     │  (Playwright MCP)│     │  (subprocess)│
-│              │────▶│                  │     │              │
-│  路由决策     │     │  页面探索         │     │  爬虫生成     │
-│  认证管理     │     │  网络抓包         │     │  数据抓取     │
-│  进度评估     │     │  登录处理         │     │  分页处理     │
-└──────┬───────┘     └──────────────────┘     └──────────────┘
-       │
-       ▼
-┌─────────────┐     ┌──────────────────┐
-│  MySQL RAG  │     │  Runtime Facts   │
-│  经验记忆     │     │  运行时事实       │
-│  策略复用     │     │  错误分类         │
-│  失败记忆     │     │  进度追踪         │
-└─────────────┘     └──────────────────┘
 ```
-
-### Key components
-
-- **Supervisor** (`crawler_agent/pipelines/supervisor_pipeline.py`): 路由决策、认证管理、进度评估
-- **Browser Agent** (`crawler_agent/pipelines/browser_agent_pipeline.py`): 页面探索、网络抓包、登录处理
-- **Code Agent** (`crawler_agent/pipelines/code_pipeline.py`): 爬虫脚本生成、数据抓取、分页处理
-- **RAG** (`crawler_agent/rag/`): MySQL 结构化经验记忆、策略复用、失败记忆
-- **Auth** (`crawler_agent/auth/`): 认证决策、会话管理、证据收集
-- **Tools** (`crawler_agent/tools/`): Playwright MCP 浏览器工具、代码执行工具
-- **Runtimes** (`crawler_agent/runtimes/`): Browser / Code 运行时
-- **Core** (`crawler_agent/core/`): 日志、工具函数、运行时事实、错误分类
+                           ┌─────────────────┐
+                           │    User Task     │
+                           │  URL + 字段要求   │
+                           └────────┬────────┘
+                                    │
+                           ┌────────▼────────┐
+                           │    Supervisor    │
+                           │   路由 · 认证     │
+                           │   进度 · 决策     │
+                           └───┬─────────┬───┘
+                               │         │
+                  ┌────────────▼──┐  ┌───▼────────────┐
+                  │ Browser Agent │  │   Code Agent    │
+                  │               │  │                 │
+                  │ • 页面快照     │  │ • 脚本生成      │
+                  │ • 网络抓包     │  │ • 数据抓取      │
+                  │ • DOM 分析     │  │ • 分页处理      │
+                  │ • 登录处理     │  │ • 错误修复      │
+                  └───────┬───────┘  └───────┬────────┘
+                          │                  │
+                          └────────┬─────────┘
+                                   │
+                    ┌──────────────┼──────────────┐
+                    │              │              │
+             ┌──────▼──────┐ ┌────▼────┐ ┌──────▼──────┐
+             │  MySQL RAG  │ │Checkpoint│ │  Artifacts  │
+             │  经验记忆    │ │ 断点续传 │ │  数据输出    │
+             └─────────────┘ └─────────┘ └─────────────┘
+```
 
 ## Features
 
-- **多 Agent 协作**: Supervisor 路由 + Browser 探索 + Code 实现
-- **智能登录**: 自动检测登录墙、人工登录确认、登录态持久化
-- **MySQL RAG**: 结构化经验记忆，避免重复探索
-- **断点续传**: Checkpoint 机制支持任务恢复
-- **错误分类**: 根因分析 + 重试策略
-- **进度追踪**: 基于证据的收敛判断
+| Feature | Description |
+|---------|-------------|
+| 🤖 **Multi-Agent** | Supervisor + Browser + Code 三 Agent 协作 |
+| 🔐 **Smart Auth** | 自动检测登录墙 · 人工确认 · 登录态持久化 |
+| 🧠 **MySQL RAG** | 结构化经验记忆 · 策略复用 · 失败记忆 · fail-open |
+| 💾 **Checkpoint** | 断点续传 · 网络证据持久化 · 任务恢复 |
+| 📊 **Error Analysis** | 根因分类 · 重试策略 · 进度追踪 |
+| 🌐 **Playwright MCP** | 浏览器自动化 · SPA 支持 · 网络拦截 |
 
 ## Quick Start
 
 ### Prerequisites
 
-- Python 3.10+
-- Node.js 22.19.0+
-- MySQL 8.4+ (or MariaDB 11.4+)
+- Python 3.10+ · Node.js 22.19+ · MySQL 8.4+
 
-### 1. Install dependencies
+### Installation
 
 ```bash
+# Clone
+git clone https://github.com/Palpitake/crawler.git
+cd crawler
+
+# Python dependencies
 pip install -r requirements.txt
+
+# Node.js runtime
 cd pi-browser-agent && npm ci && cd ..
 ```
 
-### 2. Configure MySQL
-
-**Option A: Docker (recommended)**
+### Database Setup
 
 ```bash
+# Option A: Docker
 cp .env.mysql.example .env
-# Edit .env to change passwords
 docker compose -f docker-compose.mysql.yml --env-file .env up -d
-```
 
-**Option B: Existing MySQL**
-
-```bash
+# Option B: Existing MySQL
 cp .env.mysql.example .env
-# Edit .env with your MySQL connection details
 mysql -u root -p < crawler_agent/rag/sql/001_mysql_rag_schema.sql
-```
 
-### 3. Verify
-
-```bash
+# Verify connection
 python scripts/rag_health.py
 ```
 
-### 4. Run
+### Run
 
 ```bash
 python main.py
 ```
 
-## MySQL RAG
+## Project Structure
 
-The RAG system stores structured experience memories for strategy reuse and failure prevention.
-
-### Schema
-
-7 tables: `rag_memory`, `rag_strategy_endpoint`, `rag_failure_memory`, `rag_execution`, `rag_memory_usage`, `rag_memory_event`, `rag_field_alias`
-
-### Memory types
-
-- **site**: route, page type, authentication risks
-- **strategy**: data source, interaction, field and pagination strategy
-- **endpoint**: endpoint provenance, request/response signatures
-- **authentication**: observed auth state and verification behaviour
-- **failure**: root cause, terminal symptom, block TTL
-
-### Fail-open behavior
-
-When MySQL is unavailable, RAG falls back to JSONL and never blocks crawler execution:
-
-```text
-rag.query status=degraded → JSONL fallback → task continues
+```
+crawler/
+├── main.py                              # Entry point
+├── crawler_agent/                       # Core package
+│   ├── core/                            #   Logging · utils · error classification
+│   ├── pipelines/                       #   Supervisor · Browser · Code agents
+│   ├── runtimes/                        #   Pi agent runtime bindings
+│   ├── tools/                           #   Playwright MCP · code execution
+│   ├── auth/                            #   Auth decision · sessions · evidence
+│   └── rag/                             #   MySQL RAG · memory cards · ranking
+│       └── sql/001_mysql_rag_schema.sql
+├── scripts/                             # Health · migration · maintenance
+├── tests/                               # Test suite
+├── docs/                                # RAG · Authentication docs
+├── pi-browser-agent/                    # Node.js agent runtime
+│   └── src/                             #   browser · code · supervisor agents
+├── docker-compose.mysql.yml             # Docker MySQL
+└── .env.mysql.example                   # Config template
 ```
 
-Set `RAG_FAIL_OPEN=false` only for dedicated RAG testing.
+## RAG Memory System
+
+MySQL 结构化经验记忆，5 类记忆 + 失败防护：
+
+| Memory Type | Stores |
+|-------------|--------|
+| `site` | 路由 · 页面类型 · 认证风险 |
+| `strategy` | 数据源 · 交互方式 · 字段映射 · 分页策略 |
+| `endpoint` | API 端点 · 请求/响应签名 |
+| `authentication` | 认证状态 · 验证行为 |
+| `failure` | 根因 · 阻断 TTL · 重试策略 |
+
+> **Fail-open**: MySQL 不可用时自动降级为 JSONL，不阻塞爬虫执行。
 
 ## Configuration
 
-See `.env.mysql.example` for all settings:
-
-```text
-RAG_BACKEND=mysql|jsonl|disabled
-RAG_FAIL_OPEN=true|false
-RAG_DUAL_WRITE_JSONL=true|false
-RAG_MYSQL_HOST / PORT / DATABASE / USER / PASSWORD
-RAG_MYSQL_POOL_SIZE=6
-RAG_ENABLE_FULLTEXT=true
-RAG_TOP_K_SITE=5 / STRATEGY=8 / FAILURE=5
+```env
+# .env (from .env.mysql.example)
+RAG_BACKEND=mysql
+RAG_MYSQL_HOST=127.0.0.1
+RAG_MYSQL_PORT=3306
+RAG_MYSQL_DATABASE=crawler_rag
+RAG_MYSQL_USER=crawler_rag_app
+RAG_MYSQL_PASSWORD=your_password
+RAG_TOP_K_STRATEGY=8
 ```
 
-## Project structure
-
-```text
-├── main.py                         # Entry point
-├── crawler_agent/                  # Core package
-│   ├── __init__.py / version.py / cli.py
-│   ├── core/                       # Shared utilities
-│   │   ├── common.py               #   LLM helpers, JSON utils
-│   │   ├── logger.py               #   Structured logging
-│   │   ├── api_logger.py           #   API cost tracking
-│   │   ├── runtime_facts.py        #   Error classification, progress
-│   │   ├── collection_evidence.py  #   Evidence collection
-│   │   ├── tooling.py              #   Tool utilities
-│   │   └── transcript_utils.py     #   Transcript sanitization
-│   ├── pipelines/                  # Agent pipelines
-│   │   ├── supervisor_pipeline.py  #   Supervisor (routing, auth, progress)
-│   │   ├── browser_agent_pipeline.py # Browser (Playwright MCP exploration)
-│   │   ├── browser_pipeline.py     #   Browser pipeline wrapper
-│   │   └── code_pipeline.py        #   Code (crawler generation)
-│   ├── runtimes/                   # Pi agent runtimes
-│   │   ├── pi_browser_runtime.py   #   Browser agent runtime
-│   │   └── pi_code_runtime.py      #   Code agent runtime
-│   ├── tools/                      # Tool implementations
-│   │   ├── mcp_browser_tools.py    #   Playwright MCP browser tools
-│   │   └── code_tools.py           #   Code execution tools
-│   ├── auth/                       # Authentication module
-│   │   ├── contracts.py / decision.py / evidence.py
-│   │   ├── models.py / service.py / sessions.py
-│   └── rag/                        # MySQL RAG module
-│       ├── config.py / models.py / normalizer.py
-│       ├── ranker.py / memory_cards.py / pool.py
-│       ├── repository.py / writer.py / service.py
-│       ├── feedback.py / migration.py / maintenance.py
-│       └── sql/001_mysql_rag_schema.sql
-├── scripts/                        # Utility scripts
-│   ├── rag_health.py / rag_init_mysql.py
-│   ├── rag_migrate.py / rag_maintenance.py
-│   └── _bootstrap.py
-├── tests/                          # Test suite
-├── docs/                           # Documentation
-│   ├── RAG_MYSQL.md
-│   └── AUTHENTICATION.md
-├── pi-browser-agent/               # Node.js agent runtime
-│   └── src/ (browser-agent.mjs, code-agent.mjs, supervisor-agent.mjs, agent-utils.mjs)
-├── docker-compose.mysql.yml        # Docker MySQL setup
-└── .env.mysql.example              # Environment template
-```
+See [.env.mysql.example](.env.mysql.example) for all options.
 
 ## Maintenance
 
 ```bash
-# Health check
-python scripts/rag_health.py
-
-# Daily maintenance (expire stale, quarantine failures, recalculate reliability)
-python scripts/rag_maintenance.py
-
-# Legacy JSONL migration
-python scripts/rag_migrate.py crawler_workspace/runtime/rag/crawler_rag.jsonl --dry-run
-python scripts/rag_migrate.py crawler_workspace/runtime/rag/crawler_rag.jsonl
+python scripts/rag_health.py          # Health check
+python scripts/rag_maintenance.py     # Daily: expire · quarantine · recalculate
+python scripts/rag_migrate.py file.jsonl --dry-run  # Legacy migration
 ```
 
-## Privacy
+## Documentation
 
-RAG persistence removes or masks: cookies, auth tokens, passwords, secrets, storage-state paths, sensitive URL parameters (`xsec_token`, `pcdk`, `spmTag`, etc.).
+- [RAG MySQL Schema & Retrieval](docs/RAG_MYSQL.md)
+- [Authentication Protocol](docs/AUTHENTICATION.md)
 
-Response bodies and browser storage state are never written to MySQL.
+## Tech Stack
+
+| Layer | Technology |
+|-------|-----------|
+| Orchestration | LangGraph StateGraph |
+| LLM | DeepSeek v3/v4 |
+| Browser | Playwright MCP |
+| Memory | MySQL 8.4 + PyMySQL |
+| Runtime | Python 3.10+ · Node.js 22+ |
+| Data | Pandas · CSV · JSON |
 
 ## License
 
